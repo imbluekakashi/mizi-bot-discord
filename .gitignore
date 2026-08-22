@@ -1,0 +1,6 @@
+.venv
+__pycache__
+*.pyc
+.env
+mizi_bot.db
+deploy_log.txt
