@@ -14,14 +14,14 @@ if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
 
     print(f"[DB] Conectando a Turso remoto: {clean_host}")
 
-    DATABASE_URL = (
-        f"sqlite+libsql://{clean_host}"
-        f"?authToken={TURSO_AUTH_TOKEN}&secure=true"
-    )
+    DATABASE_URL = f"sqlite+libsql://{clean_host}?secure=true"
 
     engine = create_engine(
         DATABASE_URL,
         echo=False,
+        connect_args={
+            "auth_token": TURSO_AUTH_TOKEN,
+        },
     )
 
 else:
