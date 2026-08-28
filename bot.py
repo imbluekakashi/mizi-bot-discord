@@ -1,6 +1,3 @@
-from keep_alive import start_keep_alive_server
-from database.database import init_db
-
 import asyncio
 import os
 import random
@@ -12,6 +9,8 @@ from dotenv import load_dotenv
 
 from ai.prompt_builder import PromptBuilder
 from ai.provider_factory import FallbackAIProvider
+from database.database import init_db
+from keep_alive import start_keep_alive_server
 from memory.conversation_memory import ConversationMemory
 from models.character import Character
 
@@ -70,7 +69,7 @@ async def on_message(message):
         user_id=str(message.author.id),
     )
 
-await asyncio.to_thread(
+    await asyncio.to_thread(
         memory.ensure_conversation,
         conversation_id=conversation_id,
         character_id="mizi",
@@ -81,13 +80,11 @@ await asyncio.to_thread(
 
     history = await asyncio.to_thread(memory.get_history, conversation_id)
 
-    history = memory.get_history(conversation_id)
-
     messages = prompt_builder.build_messages(user_message, history=history)
 
     try:
         async with message.channel.typing():
-response = await asyncio.wait_for(
+            response = await asyncio.wait_for(
                 asyncio.to_thread(
                     ai.generate,
                     messages=messages,
@@ -98,9 +95,8 @@ response = await asyncio.wait_for(
                 timeout=45,
             )
 
-await asyncio.to_thread(memory.add_user_message, conversation_id, user_message)
+        await asyncio.to_thread(memory.add_user_message, conversation_id, user_message)
         await asyncio.to_thread(memory.add_assistant_message, conversation_id, response)
-        memory.add_assistant_message(conversation_id, response)
 
         parts = split_response(response)
 
@@ -130,5 +126,4 @@ async def main():
     await bot.start(TOKEN)
 
 
-import asyncio
 asyncio.run(main())
