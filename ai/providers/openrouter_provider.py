@@ -16,11 +16,11 @@ class OpenRouterProvider(AIProvider):
                 "No se encontró OPENROUTER_API_KEY en el archivo .env"
             )
 
-self.client = OpenAI(
-    api_key=api_key,
-    base_url="https://openrouter.ai/api/v1",
-    timeout=30.0,
-)
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
+            timeout=30.0,
+        )
 
     def generate(
         self,
