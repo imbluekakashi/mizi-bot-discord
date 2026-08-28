@@ -16,7 +16,7 @@ class GroqProvider(AIProvider):
                 "No se encontró GROQ_API_KEY en el archivo .env"
             )
 
-self.client = Groq(api_key=api_key, timeout=30.0)
+        self.client = Groq(api_key=api_key, timeout=30.0)
 
     def generate(
         self,
