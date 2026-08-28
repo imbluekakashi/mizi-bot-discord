@@ -70,7 +70,8 @@ async def on_message(message):
         user_id=str(message.author.id),
     )
 
-    memory.ensure_conversation(
+await asyncio.to_thread(
+        memory.ensure_conversation,
         conversation_id=conversation_id,
         character_id="mizi",
         user_id=str(message.author.id),
@@ -78,20 +79,27 @@ async def on_message(message):
         channel_id=str(message.channel.id),
     )
 
+    history = await asyncio.to_thread(memory.get_history, conversation_id)
+
     history = memory.get_history(conversation_id)
 
     messages = prompt_builder.build_messages(user_message, history=history)
 
     try:
         async with message.channel.typing():
-            response = ai.generate(
-                messages=messages,
-                model=character.ai_settings.model,
-                temperature=character.ai_settings.temperature,
-                max_tokens=character.ai_settings.max_tokens,
+response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ai.generate,
+                    messages=messages,
+                    model=character.ai_settings.model,
+                    temperature=character.ai_settings.temperature,
+                    max_tokens=character.ai_settings.max_tokens,
+                ),
+                timeout=45,
             )
 
-        memory.add_user_message(conversation_id, user_message)
+await asyncio.to_thread(memory.add_user_message, conversation_id, user_message)
+        await asyncio.to_thread(memory.add_assistant_message, conversation_id, response)
         memory.add_assistant_message(conversation_id, response)
 
         parts = split_response(response)
