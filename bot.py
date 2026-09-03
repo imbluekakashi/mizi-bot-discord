@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import time
 
 import discord
 
@@ -34,6 +35,9 @@ memory = ConversationMemory()
 
 ai = FallbackAIProvider(character.ai_settings.fallback_providers)
 
+DB_TIMEOUT = 15
+AI_TIMEOUT = 45
+
 
 def split_response(response: str, max_parts: int = 3) -> list[str]:
     parts = [part.strip() for part in response.split("|||")]
@@ -64,25 +68,35 @@ async def on_message(message):
     if not user_message:
         user_message = "Hola Mizi."
 
+    start_time = time.monotonic()
     conversation_id = ConversationMemory.build_conversation_id(
         channel_id=str(message.channel.id),
         user_id=str(message.author.id),
     )
 
-    await asyncio.to_thread(
-        memory.ensure_conversation,
-        conversation_id=conversation_id,
-        character_id="mizi",
-        user_id=str(message.author.id),
-        guild_id=str(message.guild.id) if message.guild else None,
-        channel_id=str(message.channel.id),
-    )
-
-    history = await asyncio.to_thread(memory.get_history, conversation_id)
-
-    messages = prompt_builder.build_messages(user_message, history=history)
-
     try:
+        print(f"[FLOW] {conversation_id} -> ensure_conversation")
+        await asyncio.wait_for(
+            asyncio.to_thread(
+                memory.ensure_conversation,
+                conversation_id=conversation_id,
+                character_id="mizi",
+                user_id=str(message.author.id),
+                guild_id=str(message.guild.id) if message.guild else None,
+                channel_id=str(message.channel.id),
+            ),
+            timeout=DB_TIMEOUT,
+        )
+
+        print(f"[FLOW] {conversation_id} -> get_history")
+        history = await asyncio.wait_for(
+            asyncio.to_thread(memory.get_history, conversation_id),
+            timeout=DB_TIMEOUT,
+        )
+
+        messages = prompt_builder.build_messages(user_message, history=history)
+
+        print(f"[FLOW] {conversation_id} -> ai.generate")
         async with message.channel.typing():
             response = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -92,11 +106,18 @@ async def on_message(message):
                     temperature=character.ai_settings.temperature,
                     max_tokens=character.ai_settings.max_tokens,
                 ),
-                timeout=45,
+                timeout=AI_TIMEOUT,
             )
 
-        await asyncio.to_thread(memory.add_user_message, conversation_id, user_message)
-        await asyncio.to_thread(memory.add_assistant_message, conversation_id, response)
+        print(f"[FLOW] {conversation_id} -> guardando mensajes")
+        await asyncio.wait_for(
+            asyncio.to_thread(memory.add_user_message, conversation_id, user_message),
+            timeout=DB_TIMEOUT,
+        )
+        await asyncio.wait_for(
+            asyncio.to_thread(memory.add_assistant_message, conversation_id, response),
+            timeout=DB_TIMEOUT,
+        )
 
         parts = split_response(response)
 
@@ -110,13 +131,29 @@ async def on_message(message):
             else:
                 await message.channel.send(part)
 
-    except Exception as error:
-        print("Error al generar respuesta:")
-        print(error)
+        elapsed = time.monotonic() - start_time
+        print(f"[FLOW] {conversation_id} -> completado en {elapsed:.2f}s")
 
-        await message.reply(
-            "Perdón, tuve un pequeño problema intentando responderte."
-        )
+    except asyncio.TimeoutError:
+        elapsed = time.monotonic() - start_time
+        print(f"[TIMEOUT] {conversation_id} -> se colgó tras {elapsed:.2f}s")
+
+        try:
+            await message.reply(
+                "Perdón, me tardé demasiado pensando la respuesta, intenta de nuevo."
+            )
+        except discord.HTTPException:
+            pass
+
+    except Exception as error:
+        print(f"[ERROR] {conversation_id} -> {error}")
+
+        try:
+            await message.reply(
+                "Perdón, tuve un pequeño problema intentando responderte."
+            )
+        except discord.HTTPException:
+            pass
 
     await bot.process_commands(message)
 
