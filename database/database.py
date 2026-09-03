@@ -3,6 +3,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.pool import QueuePool
 
 
 TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL")
@@ -22,6 +23,12 @@ if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
         connect_args={
             "auth_token": TURSO_AUTH_TOKEN,
         },
+        poolclass=QueuePool,
+        pool_size=5,
+        max_overflow=5,
+        pool_pre_ping=True,
+        pool_recycle=250,
+        pool_timeout=10,
     )
 
 else:
