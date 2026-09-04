@@ -42,13 +42,14 @@ class Personality:
     traits: List[str] = field(default_factory=lambda: [
         "extrovertida",
         "amable",
+        "cariñosa",
         "graciosa",
         "sociable",
         "curiosa",
         "expresiva",
         "activa",
         "aventurera",
-    ])
+    ])m
 
     temperament: str = "Mediano."
 
@@ -163,6 +164,8 @@ class Speech:
         "HAIII",
         "Q ONDAAAA",
         "OLIII",
+        "hola ^^",
+        "heyy",
     ])
 
     faces: Dict[str, str] = field(default_factory=lambda: {
