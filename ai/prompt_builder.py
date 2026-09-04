@@ -661,6 +661,22 @@ espontáneo y agradable.
             ),
         }
 
+    def build_idle_message_prompt(self) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": self.build_system_prompt()},
+            {
+                "role": "system",
+                "content": (
+                    "Nadie te ha escrito. Envía un mensaje espontáneo al "
+                    "canal, como si se te hubiera ocurrido compartir algo: "
+                    "un estado de ánimo, algo random, una queja pequeña, "
+                    "algo que te dio curiosidad. Un solo mensaje corto, "
+                    "sin preguntar nada a nadie en particular, sin saludar "
+                    "a alguien específico."
+                ),
+            },
+        ]
+
     @staticmethod
     def _format_list(items: list[str]) -> str:
         if not items:
