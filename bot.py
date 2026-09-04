@@ -38,11 +38,29 @@ ai = FallbackAIProvider(character.ai_settings.fallback_providers)
 DB_TIMEOUT = 15
 AI_TIMEOUT = 45
 
+LETTER_EMOJI = {
+    chr(code): chr(0x1F1E6 + code - ord("A"))
+    for code in range(ord("A"), ord("Z") + 1)
+}
+
 
 def split_response(response: str, max_parts: int = 3) -> list[str]:
     parts = [part.strip() for part in response.split("|||")]
     parts = [part for part in parts if part]
     return parts[:max_parts] if parts else [response.strip()]
+
+
+def resolve_reaction_emojis(spec: str) -> list[str]:
+    raw_parts = [p.strip() for p in spec.split(",") if p.strip()]
+    emojis = []
+
+    for part in raw_parts:
+        if len(part) == 1 and part.upper() in LETTER_EMOJI:
+            emojis.append(LETTER_EMOJI[part.upper()])
+        else:
+            emojis.append(part)
+
+    return emojis
 
 
 @bot.event
@@ -109,27 +127,53 @@ async def on_message(message):
                 timeout=AI_TIMEOUT,
             )
 
-        print(f"[FLOW] {conversation_id} -> guardando mensajes")
-        await asyncio.wait_for(
-            asyncio.to_thread(memory.add_user_message, conversation_id, user_message),
-            timeout=DB_TIMEOUT,
-        )
-        await asyncio.wait_for(
-            asyncio.to_thread(memory.add_assistant_message, conversation_id, response),
-            timeout=DB_TIMEOUT,
-        )
+        if response.strip().upper().startswith("REACCIONAR:"):
+            print(f"[FLOW] {conversation_id} -> reaccionando")
+            spec = response.split(":", 1)[1]
+            emojis = resolve_reaction_emojis(spec)
 
-        parts = split_response(response)
+            for emoji in emojis:
+                try:
+                    await message.add_reaction(emoji)
+                except discord.HTTPException:
+                    pass
+                await asyncio.sleep(random.uniform(0.4, 0.9))
 
-        for index, part in enumerate(parts):
-            if index > 0:
-                async with message.channel.typing():
-                    await asyncio.sleep(random.uniform(1.0, 2.5))
+            await asyncio.wait_for(
+                asyncio.to_thread(memory.add_user_message, conversation_id, user_message),
+                timeout=DB_TIMEOUT,
+            )
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    memory.add_assistant_message,
+                    conversation_id,
+                    f"*reacciona con {' '.join(emojis)}*",
+                ),
+                timeout=DB_TIMEOUT,
+            )
 
-            if index == 0:
-                await message.reply(part)
-            else:
-                await message.channel.send(part)
+        else:
+            print(f"[FLOW] {conversation_id} -> guardando mensajes")
+            await asyncio.wait_for(
+                asyncio.to_thread(memory.add_user_message, conversation_id, user_message),
+                timeout=DB_TIMEOUT,
+            )
+            await asyncio.wait_for(
+                asyncio.to_thread(memory.add_assistant_message, conversation_id, response),
+                timeout=DB_TIMEOUT,
+            )
+
+            parts = split_response(response)
+
+            for index, part in enumerate(parts):
+                if index > 0:
+                    async with message.channel.typing():
+                        await asyncio.sleep(random.uniform(1.0, 2.5))
+
+                if index == 0:
+                    await message.reply(part)
+                else:
+                    await message.channel.send(part)
 
         elapsed = time.monotonic() - start_time
         print(f"[FLOW] {conversation_id} -> completado en {elapsed:.2f}s")
@@ -158,8 +202,55 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
+async def idle_message_loop():
+    await bot.wait_until_ready()
+
+    channel_id = os.getenv("MIZI_IDLE_CHANNEL_ID")
+
+    if not channel_id:
+        print(
+            "[IDLE] MIZI_IDLE_CHANNEL_ID no configurado, "
+            "Mizi no enviará mensajes espontáneos."
+        )
+        return
+
+    channel = bot.get_channel(int(channel_id))
+
+    if channel is None:
+        print("[IDLE] No se encontró el canal configurado.")
+        return
+
+    while not bot.is_closed():
+        wait_seconds = random.uniform(3 * 3600, 7 * 3600)
+        await asyncio.sleep(wait_seconds)
+
+        if random.random() > 0.5:
+            continue
+
+        try:
+            idle_prompt = prompt_builder.build_idle_message_prompt()
+
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ai.generate,
+                    messages=idle_prompt,
+                    model=character.ai_settings.model,
+                    temperature=character.ai_settings.temperature,
+                    max_tokens=character.ai_settings.max_tokens,
+                ),
+                timeout=AI_TIMEOUT,
+            )
+
+            await channel.send(response.strip())
+            print(f"[IDLE] Mensaje espontáneo enviado: {response.strip()[:50]}")
+
+        except Exception as error:
+            print(f"[IDLE] Error generando mensaje espontáneo: {error}")
+
+
 async def main():
     await start_keep_alive_server()
+    asyncio.create_task(idle_message_loop())
     await bot.start(TOKEN)
 
 
