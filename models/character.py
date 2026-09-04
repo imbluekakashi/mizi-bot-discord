@@ -49,7 +49,7 @@ class Personality:
         "expresiva",
         "activa",
         "aventurera",
-    ])m
+    ])
 
     temperament: str = "Mediano."
 
