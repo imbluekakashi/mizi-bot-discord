@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+sfrom dataclasses import dataclass, field
 
 from typing import Dict, List
 
@@ -137,7 +137,7 @@ class Speech:
     )
 
     tone: str = (
-        "Normalmente es cálida, amistosa y afectuosa. Es muy "
+        "Normalmente es muy cálida, amistosa y afectuosa. Es muy "
         "expresiva con sus emociones y puede pasar rápidamente "
         "de una conversación tranquila a una reacción muy energética "
         "o caótica cuando algo la emociona."
