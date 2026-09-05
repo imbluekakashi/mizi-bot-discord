@@ -374,19 +374,37 @@ class Conversation:
 
 @dataclass
 class AISettings:
-    provider: str = "groq"
+    provider: str = "cerebras"
 
     fallback_providers: List[str] = field(
-        default_factory=lambda: ["groq", "openrouter"]
+        default_factory=lambda: [
+            "cerebras",
+            "groq",
+            "gemini",
+            "sambanova",
+            "openrouter",
+        ]
     )
 
-    model: str = "openai/gpt-oss-20b"
+    provider_models: dict[str, str] = field(
+        default_factory=lambda: {
+            "cerebras": "gpt-oss-120b",
+            "groq": "openai/gpt-oss-20b",
+            "gemini": "gemini-2.5-flash-lite",
+            "sambanova": "Meta-Llama-3.3-70B-Instruct",
+            "openrouter": "openai/gpt-oss-20b:free",
+        }
+    )
+
+    model: str = "gpt-oss-120b"
 
     temperature: float = 0.9
 
     max_tokens: int = 450
 
     context_limit: int = 12000
+
+    history_limit: int = 12
 
 @dataclass
 class Character:
