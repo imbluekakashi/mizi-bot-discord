@@ -139,6 +139,15 @@ def split_response(
 def resolve_reaction_emojis(
     spec: str,
 ) -> list[str]:
+    """
+    Convierte la especificación de reacciones generada por Mizi
+    en una lista de emojis válidos.
+
+    Ejemplos:
+        "❤️"              -> ["❤️"]
+        "❤️, 🥹"          -> ["❤️", "🥹"]
+        "A, B"            -> ["🇦", "🇧"]
+    """
 
     raw_parts = [
         part.strip()
@@ -150,6 +159,7 @@ def resolve_reaction_emojis(
 
     for part in raw_parts:
 
+        # Letras A-Z -> emoji de letra/bandera
         if (
             len(part) == 1
             and part.upper() in LETTER_EMOJI
@@ -157,8 +167,11 @@ def resolve_reaction_emojis(
             emojis.append(
                 LETTER_EMOJI[part.upper()]
             )
+            continue
 
-        else:
+        # Emojis Unicode.
+        # Evitamos aceptar texto normal como "hola".
+        if any(ord(char) > 127 for char in part):
             emojis.append(part)
 
     return emojis
@@ -481,92 +494,85 @@ async def handle_ai_message(
             await update_provider_dashboard()
 
             # =================================================
-            # REACCIONES
+            # DETECTAR REACCIÓN
             # =================================================
+            # Solo la PRIMERA línea es la especificación de la
+            # reacción ("REACCIONAR: emoji1, emoji2"). Todo lo
+            # que venga después (si hay algo) es un mensaje
+            # normal que Mizi quiere mandar además de reaccionar,
+            # y debe seguir exactamente el mismo flujo que
+            # cualquier respuesta normal (guardado, "|||", envío).
 
             response_clean = response.strip()
 
-            if response_clean.upper().startswith("REACCIONAR:"):
+            is_reaction = response_clean.upper().startswith(
+                "REACCIONAR:"
+            )
+
+            reaction_emojis: list[str] = []
+            remaining_text = response_clean
+
+            if is_reaction:
 
                 print(
                     f"[FLOW] {conversation_id} "
                     "-> reaccionando"
                 )
 
-                # Obtener todo lo que viene después de REACCIONAR:
-                spec = response_clean.split(
+                first_line, _, rest = response_clean.partition(
+                    "\n"
+                )
+
+                spec = first_line.split(
                     ":",
                     1,
                 )[1].strip()
 
-                def resolve_reaction_emojis(
-    spec: str,
-) -> list[str]:
-    raw_parts = [
-        part.strip()
-        for part in spec.split(",")
-        if part.strip()
-    ]
+                reaction_emojis = resolve_reaction_emojis(spec)
 
-    emojis = []
+                remaining_text = rest.strip()
 
-    for part in raw_parts:
+            # =================================================
+            # REACCIÓN INVÁLIDA O VACÍA
+            # =================================================
+            # El modelo quiso reaccionar pero no dio emojis
+            # válidos. No reaccionamos ni mandamos nada raro al
+            # canal, solo dejamos constancia en memoria.
 
-        # Letras A-Z → emoji de bandera
-        if (
-            len(part) == 1
-            and part.upper() in LETTER_EMOJI
-        ):
-            emojis.append(
-                LETTER_EMOJI[part.upper()]
-            )
-            continue
+            if is_reaction and not reaction_emojis:
 
-        # Emojis Unicode normales.
-        # Discord acepta estos directamente.
-        if any(
-            ord(char) > 127
-            for char in part
-        ):
-            emojis.append(part)
+                print(
+                    f"[REACTION] {conversation_id} "
+                    "-> reacción inválida/vacía"
+                )
 
-    return emojis
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        memory.add_user_message,
+                        conversation_id,
+                        user_message,
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
 
-                # -------------------------------------------------
-                # Si el modelo pidió reaccionar pero no dio emojis,
-                # no dejamos la interacción completamente vacía.
-                # -------------------------------------------------
-                if not emojis:
-                    print(
-                        f"[REACTION] {conversation_id} "
-                        "-> reacción inválida/vacía"
-                    )
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        memory.add_assistant_message,
+                        conversation_id,
+                        "[Mizi reaccionó, pero la reacción no fue válida]",
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
 
-                    # Guardamos igualmente el mensaje del usuario,
-                    # pero dejamos que el sistema normalice la salida.
-                    await asyncio.wait_for(
-                        asyncio.to_thread(
-                            memory.add_user_message,
-                            conversation_id,
-                            user_message,
-                        ),
-                        timeout=DB_TIMEOUT,
-                    )
+            else:
 
-                    await asyncio.wait_for(
-                        asyncio.to_thread(
-                            memory.add_assistant_message,
-                            conversation_id,
-                            "[Mizi reaccionó, pero la reacción no fue válida]",
-                        ),
-                        timeout=DB_TIMEOUT,
-                    )
+                # =============================================
+                # AÑADIR REACCIÓN (SI LA HAY)
+                # =============================================
 
-                else:
-                    # -------------------------------------------------
-                    # Añadir las reacciones una por una.
-                    # -------------------------------------------------
-                    for emoji in emojis:
+                if reaction_emojis:
+
+                    for emoji in reaction_emojis:
 
                         try:
                             await message.add_reaction(emoji)
@@ -591,9 +597,17 @@ async def handle_ai_message(
                             )
                         )
 
-                    # -------------------------------------------------
-                    # Guardar conversación.
-                    # -------------------------------------------------
+                    print(
+                        f"[REACTION] {conversation_id} "
+                        f"-> completado: {' '.join(reaction_emojis)}"
+                    )
+
+                # =============================================
+                # REACCIÓN PURA (SIN TEXTO RESTANTE)
+                # =============================================
+
+                if reaction_emojis and not remaining_text:
+
                     await asyncio.wait_for(
                         asyncio.to_thread(
                             memory.add_user_message,
@@ -609,73 +623,69 @@ async def handle_ai_message(
                             conversation_id,
                             (
                                 f"*reacciona con "
-                                f"{' '.join(emojis)}*"
+                                f"{' '.join(reaction_emojis)}*"
                             ),
                         ),
                         timeout=DB_TIMEOUT,
                     )
 
+                # =============================================
+                # RESPUESTA NORMAL (CON O SIN REACCIÓN PREVIA)
+                # =============================================
+
+                else:
+
                     print(
-                        f"[REACTION] {conversation_id} "
-                        f"-> completado: {' '.join(emojis)}"
+                        f"[FLOW] {conversation_id} "
+                        "-> guardando mensajes"
                     )
 
-            # =================================================
-            # RESPUESTA NORMAL
-            # =================================================
-            else:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            memory.add_user_message,
+                            conversation_id,
+                            user_message,
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
 
-                print(
-                    f"[FLOW] {conversation_id} "
-                    "-> guardando mensajes"
-                )
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            memory.add_assistant_message,
+                            conversation_id,
+                            remaining_text,
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
 
-                await asyncio.wait_for(
-                    asyncio.to_thread(
-                        memory.add_user_message,
-                        conversation_id,
-                        user_message,
-                    ),
-                    timeout=DB_TIMEOUT,
-                )
+                    parts = split_response(
+                        remaining_text
+                    )
 
-                await asyncio.wait_for(
-                    asyncio.to_thread(
-                        memory.add_assistant_message,
-                        conversation_id,
-                        response,
-                    ),
-                    timeout=DB_TIMEOUT,
-                )
+                    for index, part in enumerate(parts):
 
-                parts = split_response(
-                    response
-                )
+                        if index > 0:
 
-                for index, part in enumerate(parts):
+                            async with message.channel.typing():
 
-                    if index > 0:
-
-                        async with message.channel.typing():
-
-                            await asyncio.sleep(
-                                random.uniform(
-                                    1.0,
-                                    2.5,
+                                await asyncio.sleep(
+                                    random.uniform(
+                                        1.0,
+                                        2.5,
+                                    )
                                 )
+
+                        if index == 0:
+
+                            await message.reply(
+                                part
                             )
 
-                    if index == 0:
+                        else:
 
-                        await message.reply(
-                            part
-                        )
-
-                    else:
-
-                        await message.channel.send(
-                            part
-                        )
+                            await message.channel.send(
+                                part
+                            )
 
             elapsed = (
                 time.monotonic()
