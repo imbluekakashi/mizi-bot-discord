@@ -480,7 +480,7 @@ async def handle_ai_message(
             # Actualizar dashboard después del intento.
             await update_provider_dashboard()
 
-                        # =================================================
+            # =================================================
             # REACCIONES
             # =================================================
 
@@ -499,7 +499,38 @@ async def handle_ai_message(
                     1,
                 )[1].strip()
 
-                emojis = resolve_reaction_emojis(spec)
+                def resolve_reaction_emojis(
+    spec: str,
+) -> list[str]:
+    raw_parts = [
+        part.strip()
+        for part in spec.split(",")
+        if part.strip()
+    ]
+
+    emojis = []
+
+    for part in raw_parts:
+
+        # Letras A-Z → emoji de bandera
+        if (
+            len(part) == 1
+            and part.upper() in LETTER_EMOJI
+        ):
+            emojis.append(
+                LETTER_EMOJI[part.upper()]
+            )
+            continue
+
+        # Emojis Unicode normales.
+        # Discord acepta estos directamente.
+        if any(
+            ord(char) > 127
+            for char in part
+        ):
+            emojis.append(part)
+
+    return emojis
 
                 # -------------------------------------------------
                 # Si el modelo pidió reaccionar pero no dio emojis,
