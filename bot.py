@@ -11,11 +11,12 @@ from ai.prompt_builder import PromptBuilder
 from ai.provider_factory import FallbackAIProvider
 from database.database import init_db
 from database.repositories.bot_config_repository import BotConfigRepository
-from commands.admin_commands import AdminCommands
 from keep_alive import start_keep_alive_server
 from memory.conversation_memory import ConversationMemory
 from models.character import Character
 from runtime_config import ConfigManager
+
+from commands.admin_commands import AdminCommands
 
 
 load_dotenv()
@@ -28,15 +29,10 @@ if not TOKEN:
         "No se encontró DISCORD_TOKEN en las variables de entorno."
     )
 
-DB_TIMEOUT = int(os.getenv("MIZI_DB_TIMEOUT", "15"))
-AI_TIMEOUT = int(os.getenv("MIZI_AI_TIMEOUT", "45"))
-MAX_CONCURRENT_AI = int(
-    os.getenv("MIZI_MAX_CONCURRENT_AI", "3")
-)
-
 
 intents = discord.Intents.default()
 intents.message_content = True
+
 
 bot = commands.Bot(
     command_prefix="!",
@@ -44,61 +40,78 @@ bot = commands.Bot(
 )
 
 
+# ============================================================
+# COMPONENTES PRINCIPALES
+# ============================================================
+
 character = Character()
+
+# Para que AdminCommands pueda acceder a los modelos.
+bot.character = character
 
 init_db()
 
 prompt_builder = PromptBuilder(character)
 
 memory = ConversationMemory(
-    history_limit=getattr(
-        character.ai_settings,
-        "history_limit",
-        12,
-    )
+    history_limit=character.ai_settings.history_limit
 )
 
 ai = FallbackAIProvider(
-    provider_names=character.ai_settings.fallback_providers,
-    provider_models=getattr(
-        character.ai_settings,
-        "provider_models",
-        None,
-    ),
+    character.ai_settings.fallback_providers
 )
 
-config_repo = BotConfigRepository()
-config = ConfigManager(config_repo)
+# El ProviderMonitor vive dentro de FallbackAIProvider.
+provider_monitor = ai.monitor
+
+config_repository = BotConfigRepository()
+
+config_manager = ConfigManager(
+    config_repository
+)
 
 admin_commands = AdminCommands(
     bot=bot,
-    config_manager=config,
-    dashboard=ai.monitor,
+    config_manager=config_manager,
+    provider_monitor=provider_monitor,
 )
-admin_commands.register()
+
+
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+DB_TIMEOUT = 15
+AI_TIMEOUT = 45
+MAX_CONCURRENT_AI = int(
+    os.getenv("MAX_CONCURRENT_AI", "3")
+)
 
 ai_semaphore = asyncio.Semaphore(
     MAX_CONCURRENT_AI
 )
 
-conversation_locks: dict[str, asyncio.Lock] = {}
-
-
-@bot.event
-async def setup_hook():
-    synced = await bot.tree.sync()
-    print(f"[DISCORD] Slash commands sincronizados: {len(synced)}")
+conversation_locks = {}
 
 
 LETTER_EMOJI = {
-    chr(code): chr(
-        0x1F1E6 + code - ord("A")
-    )
-    for code in range(
-        ord("A"),
-        ord("Z") + 1,
-    )
+    chr(code): chr(0x1F1E6 + code - ord("A"))
+    for code in range(ord("A"), ord("Z") + 1)
 }
+
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+def get_conversation_lock(conversation_id: str):
+    lock = conversation_locks.get(conversation_id)
+
+    if lock is None:
+        lock = asyncio.Lock()
+        conversation_locks[conversation_id] = lock
+
+    return lock
 
 
 def split_response(
@@ -108,18 +121,25 @@ def split_response(
     parts = [
         part.strip()
         for part in response.split("|||")
-        if part.strip()
     ]
 
-    if not parts:
-        return [response.strip()]
+    parts = [
+        part
+        for part in parts
+        if part
+    ]
 
-    return parts[:max_parts]
+    return (
+        parts[:max_parts]
+        if parts
+        else [response.strip()]
+    )
 
 
 def resolve_reaction_emojis(
     spec: str,
 ) -> list[str]:
+
     raw_parts = [
         part.strip()
         for part in spec.split(",")
@@ -129,6 +149,7 @@ def resolve_reaction_emojis(
     emojis = []
 
     for part in raw_parts:
+
         if (
             len(part) == 1
             and part.upper() in LETTER_EMOJI
@@ -136,70 +157,53 @@ def resolve_reaction_emojis(
             emojis.append(
                 LETTER_EMOJI[part.upper()]
             )
+
         else:
             emojis.append(part)
 
     return emojis
 
 
-async def run_db(function, *args, **kwargs):
-    return await asyncio.wait_for(
-        asyncio.to_thread(
-            function,
-            *args,
-            **kwargs,
-        ),
-        timeout=DB_TIMEOUT,
-    )
+# ============================================================
+# ACTUALIZACIÓN DEL DASHBOARD
+# ============================================================
 
+async def update_provider_dashboard():
+    config = config_manager.data
 
-async def run_ai(
-    messages: list[dict[str, str]],
-) -> str:
-    async with ai_semaphore:
-        return await asyncio.wait_for(
-            asyncio.to_thread(
-                ai.generate,
-                messages=messages,
-                model=character.ai_settings.model,
-                temperature=character.ai_settings.temperature,
-                max_tokens=character.ai_settings.max_tokens,
-            ),
-            timeout=AI_TIMEOUT,
-        )
-
-
-async def update_dashboard():
-    channel_id = config.data.logs_channel_id
-    message_id = config.data.logs_message_id
-
-    if not channel_id or not message_id:
+    if not config.logs_channel_id:
         return
 
-    channel = bot.get_channel(channel_id)
+    if not config.logs_message_id:
+        return
+
+    channel = bot.get_channel(
+        config.logs_channel_id
+    )
 
     if channel is None:
         try:
-            channel = await bot.fetch_channel(channel_id)
+            channel = await bot.fetch_channel(
+                config.logs_channel_id
+            )
         except Exception as error:
             print(
-                "[DASHBOARD] No se pudo obtener el canal:",
-                error,
+                f"[DASHBOARD] No se pudo obtener el canal: {error}"
             )
             return
 
     try:
         message = await channel.fetch_message(
-            message_id
+            config.logs_message_id
+        )
+
+        models = (
+            character.ai_settings.provider_models
         )
 
         await message.edit(
-            embed=ai.monitor.build_embed(
-                getattr(
-                    character.ai_settings,
-                    "provider_models",
-                    {},
-                )
+            embed=provider_monitor.build_embed(
+                models
             )
         )
 
@@ -208,106 +212,196 @@ async def update_dashboard():
             "[DASHBOARD] El mensaje del dashboard ya no existe."
         )
 
-    except discord.HTTPException as error:
+    except discord.Forbidden:
         print(
-            "[DASHBOARD] Error actualizando:",
-            error,
+            "[DASHBOARD] No tengo permisos para editar el dashboard."
         )
 
-
-async def activity_touch():
-    try:
-        await config.touch_activity()
     except Exception as error:
         print(
-            "[ACTIVITY] Error actualizando actividad:",
-            error,
+            f"[DASHBOARD] Error actualizando dashboard: {error}"
         )
 
+
+# ============================================================
+# SETUP DE DISCORD
+# ============================================================
+
+@bot.event
+async def setup_hook():
+
+    # Cargar configuración persistida.
+    try:
+        await config_manager.load()
+    except Exception as error:
+        print(
+            f"[CONFIG] Error cargando configuración: {error}"
+        )
+
+    # Registrar comandos administrativos.
+    admin_commands.register()
+
+    # Sincronizar slash commands.
+    try:
+        synced = await bot.tree.sync()
+
+        print(
+            f"[DISCORD] Slash commands sincronizados: "
+            f"{len(synced)}"
+        )
+
+    except Exception as error:
+        print(
+            f"[DISCORD] Error sincronizando slash commands: "
+            f"{error}"
+        )
+
+
+# ============================================================
+# READY
+# ============================================================
 
 @bot.event
 async def on_ready():
-    await config.load()
 
     print("=" * 60)
+
     print(
         f"[DISCORD] Conectado como {bot.user}"
     )
+
     print(
         f"[DISCORD] ID: {bot.user.id}"
     )
+
     print(
-        "[AI] Proveedores configurados:",
-        character.ai_settings.fallback_providers,
+        f"[AI] Proveedores configurados: "
+        f"{character.ai_settings.fallback_providers}"
     )
+
     print(
-        "[AI] Modelo principal:",
-        character.ai_settings.model,
+        f"[AI] Modelo principal: "
+        f"{character.ai_settings.model}"
     )
+
     print(
-        "[AI] Concurrencia máxima:",
-        MAX_CONCURRENT_AI,
+        f"[AI] Concurrencia máxima: "
+        f"{MAX_CONCURRENT_AI}"
     )
+
+    config = config_manager.data
+
     print(
-        "[CONFIG] Guild:",
-        config.data.guild_id,
+        f"[CONFIG] Guild: {config.guild_id}"
     )
+
     print(
-        "[CONFIG] Chat:",
-        config.data.chat_channel_id,
+        f"[CONFIG] Chat: {config.chat_channel_id}"
     )
+
     print(
-        "[CONFIG] Logs:",
-        config.data.logs_channel_id,
+        f"[CONFIG] Logs: {config.logs_channel_id}"
     )
+
     print("=" * 60)
 
 
+# ============================================================
+# MENSAJES
+# ============================================================
+
 @bot.event
 async def on_message(message: discord.Message):
+
+    # Nunca responder a otros bots.
     if message.author.bot:
         return
 
-    # DMs: jamás consultan configuración ni IA.
+    # ========================================================
+    # BLOQUEAR DMs
+    # ========================================================
+
     if message.guild is None:
         return
 
-    # Servidor autorizado solamente.
-    if (
-        config.data.guild_id is None
-        or message.guild.id != config.data.guild_id
-    ):
+    config = config_manager.data
+
+    # ========================================================
+    # SOLO SERVIDOR AUTORIZADO
+    # ========================================================
+
+    if config.guild_id is None:
         return
 
-    # Canal autorizado solamente.
-    if (
-        config.data.chat_channel_id is None
-        or message.channel.id != config.data.chat_channel_id
-    ):
+    if message.guild.id != config.guild_id:
         return
 
-    # Cualquier mensaje humano en el canal reinicia el contador.
-    await activity_touch()
+    # ========================================================
+    # SOLO CANAL AUTORIZADO
+    # ========================================================
 
-    # Si no menciona a Mizi, no gastamos tokens.
+    if config.chat_channel_id is None:
+        return
+
+    if message.channel.id != config.chat_channel_id:
+        return
+
+    # ========================================================
+    # TODA ACTIVIDAD HUMANA REINICIA EL TEMPORIZADOR
+    # ========================================================
+
+    try:
+        await config_manager.touch_activity()
+    except Exception as error:
+        print(
+            f"[CONFIG] Error actualizando actividad: {error}"
+        )
+
+    # ========================================================
+    # SOLO MENCIONES CONSUMEN IA
+    # ========================================================
+
+    if bot.user is None:
+        return
+
     if bot.user not in message.mentions:
         return
 
-    user_message = (
-        message.content
-        .replace(
-            f"<@{bot.user.id}>",
-            "",
-        )
-        .replace(
-            f"<@!{bot.user.id}>",
-            "",
-        )
-        .strip()
+    # ========================================================
+    # LIMPIAR MENCIÓN
+    # ========================================================
+
+    user_message = message.content
+
+    user_message = user_message.replace(
+        f"<@{bot.user.id}>",
+        "",
     )
+
+    user_message = user_message.replace(
+        f"<@!{bot.user.id}>",
+        "",
+    )
+
+    user_message = user_message.strip()
 
     if not user_message:
         user_message = "Hola Mizi."
+
+    await handle_ai_message(
+        message,
+        user_message,
+    )
+
+
+# ============================================================
+# IA
+# ============================================================
+
+async def handle_ai_message(
+    message: discord.Message,
+    user_message: str,
+):
 
     conversation_id = (
         ConversationMemory.build_conversation_id(
@@ -316,258 +410,397 @@ async def on_message(message: discord.Message):
         )
     )
 
-    lock = conversation_locks.setdefault(
-        conversation_id,
-        asyncio.Lock(),
+    lock = get_conversation_lock(
+        conversation_id
     )
 
     async with lock:
-        await handle_ai_message(
-            message,
-            conversation_id,
-            user_message,
-        )
 
+        start_time = time.monotonic()
 
-async def handle_ai_message(
-    message: discord.Message,
-    conversation_id: str,
-    user_message: str,
-):
-    start_time = time.monotonic()
+        try:
 
-    try:
-        print(
-            f"[FLOW] {conversation_id} -> DB"
-        )
-
-        await run_db(
-            memory.ensure_conversation,
-            conversation_id=conversation_id,
-            character_id="mizi",
-            user_id=str(message.author.id),
-            guild_id=str(message.guild.id),
-            channel_id=str(message.channel.id),
-        )
-
-        history = await run_db(
-            memory.get_history,
-            conversation_id,
-        )
-
-        messages = prompt_builder.build_messages(
-            user_message,
-            history=history,
-        )
-
-        print(
-            f"[FLOW] {conversation_id} -> AI "
-            f"(input≈{ai.monitor.estimate_tokens(chr(10).join(m.get('content','') for m in messages)):,} tokens)"
-        )
-
-        async with message.channel.typing():
-            response = await run_ai(messages)
-
-        await update_dashboard()
-
-        response = response.strip()
-
-        if not response:
-            raise RuntimeError(
-                "La IA devolvió una respuesta vacía."
+            print(
+                f"[FLOW] {conversation_id} "
+                "-> ensure_conversation"
             )
 
-        if response.upper().startswith(
-            "REACCIONAR:"
-        ):
-            spec = response.split(
-                ":",
-                1,
-            )[1]
-
-            emojis = resolve_reaction_emojis(
-                spec
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    memory.ensure_conversation,
+                    conversation_id=conversation_id,
+                    character_id="mizi",
+                    user_id=str(message.author.id),
+                    guild_id=str(message.guild.id),
+                    channel_id=str(message.channel.id),
+                ),
+                timeout=DB_TIMEOUT,
             )
 
-            for emoji in emojis:
-                try:
-                    await message.add_reaction(
-                        emoji
-                    )
-                except discord.HTTPException:
-                    pass
+            print(
+                f"[FLOW] {conversation_id} "
+                "-> get_history"
+            )
 
-                await asyncio.sleep(
-                    random.uniform(
-                        0.35,
-                        0.75,
+            history = await asyncio.wait_for(
+                asyncio.to_thread(
+                    memory.get_history,
+                    conversation_id,
+                ),
+                timeout=DB_TIMEOUT,
+            )
+
+            messages = (
+                prompt_builder.build_messages(
+                    user_message,
+                    history=history,
+                )
+            )
+
+            print(
+                f"[FLOW] {conversation_id} "
+                "-> ai.generate"
+            )
+
+            async with ai_semaphore:
+
+                async with message.channel.typing():
+
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            ai.generate,
+                            messages=messages,
+                            model=character.ai_settings.model,
+                            temperature=character.ai_settings.temperature,
+                            max_tokens=character.ai_settings.max_tokens,
+                        ),
+                        timeout=AI_TIMEOUT,
                     )
+
+            # Actualizar dashboard después del intento.
+            await update_provider_dashboard()
+
+            # =================================================
+            # REACCIONES
+            # =================================================
+
+            if response.strip().upper().startswith(
+                "REACCIONAR:"
+            ):
+
+                print(
+                    f"[FLOW] {conversation_id} "
+                    "-> reaccionando"
                 )
 
-            await run_db(
-                memory.add_user_message,
-                conversation_id,
-                user_message,
-            )
+                spec = response.split(
+                    ":",
+                    1,
+                )[1]
 
-            await run_db(
-                memory.add_assistant_message,
-                conversation_id,
-                (
-                    "*reacciona con "
-                    + " ".join(emojis)
-                    + "*"
-                ),
-            )
+                emojis = resolve_reaction_emojis(
+                    spec
+                )
 
-        else:
-            await run_db(
-                memory.add_user_message,
-                conversation_id,
-                user_message,
-            )
+                for emoji in emojis:
 
-            await run_db(
-                memory.add_assistant_message,
-                conversation_id,
-                response,
-            )
-
-            parts = split_response(response)
-
-            for index, part in enumerate(parts):
-                if index > 0:
-                    async with message.channel.typing():
-                        await asyncio.sleep(
-                            random.uniform(
-                                0.8,
-                                2.0,
-                            )
+                    try:
+                        await message.add_reaction(
+                            emoji
                         )
 
-                if index == 0:
-                    await message.reply(part)
-                else:
-                    await message.channel.send(part)
+                    except discord.HTTPException:
+                        pass
 
-        elapsed = (
-            time.monotonic() - start_time
-        )
+                    await asyncio.sleep(
+                        random.uniform(
+                            0.4,
+                            0.9,
+                        )
+                    )
 
-        print(
-            f"[FLOW] {conversation_id} -> "
-            f"completado en {elapsed:.2f}s"
-        )
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        memory.add_user_message,
+                        conversation_id,
+                        user_message,
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
 
-    except asyncio.TimeoutError:
-        await update_dashboard()
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        memory.add_assistant_message,
+                        conversation_id,
+                        (
+                            f"*reacciona con "
+                            f"{' '.join(emojis)}*"
+                        ),
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
 
-        print(
-            f"[TIMEOUT] {conversation_id}"
-        )
+            # =================================================
+            # RESPUESTA NORMAL
+            # =================================================
 
-        try:
-            await message.reply(
-                "Perdón 😭 me tardé demasiado pensando. Intenta de nuevo."
+            else:
+
+                print(
+                    f"[FLOW] {conversation_id} "
+                    "-> guardando mensajes"
+                )
+
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        memory.add_user_message,
+                        conversation_id,
+                        user_message,
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
+
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        memory.add_assistant_message,
+                        conversation_id,
+                        response,
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
+
+                parts = split_response(
+                    response
+                )
+
+                for index, part in enumerate(parts):
+
+                    if index > 0:
+
+                        async with message.channel.typing():
+
+                            await asyncio.sleep(
+                                random.uniform(
+                                    1.0,
+                                    2.5,
+                                )
+                            )
+
+                    if index == 0:
+
+                        await message.reply(
+                            part
+                        )
+
+                    else:
+
+                        await message.channel.send(
+                            part
+                        )
+
+            elapsed = (
+                time.monotonic()
+                - start_time
             )
-        except discord.HTTPException:
-            pass
 
-    except Exception as error:
-        await update_dashboard()
-
-        print(
-            f"[ERROR] {conversation_id} -> "
-            f"{type(error).__name__}: {error}"
-        )
-
-        try:
-            await message.reply(
-                "Perdón 😭 tuve un pequeño problema intentando responderte."
+            print(
+                f"[FLOW] {conversation_id} "
+                f"-> completado en {elapsed:.2f}s"
             )
-        except discord.HTTPException:
-            pass
 
+        except asyncio.TimeoutError:
+
+            elapsed = (
+                time.monotonic()
+                - start_time
+            )
+
+            print(
+                f"[TIMEOUT] {conversation_id} "
+                f"-> se colgó tras {elapsed:.2f}s"
+            )
+
+            try:
+
+                await message.reply(
+                    "Perdón, me tardé demasiado "
+                    "pensando la respuesta, intenta de nuevo."
+                )
+
+            except discord.HTTPException:
+                pass
+
+        except Exception as error:
+
+            print(
+                f"[ERROR] {conversation_id} "
+                f"-> {type(error).__name__}: {error}"
+            )
+
+            # Actualizar dashboard incluso si la IA falla.
+            await update_provider_dashboard()
+
+            try:
+
+                await message.reply(
+                    "Perdón, tuve un pequeño problema "
+                    "intentando responderte."
+                )
+
+            except discord.HTTPException:
+                pass
+
+
+# ============================================================
+# MENSAJES ESPONTÁNEOS
+# ============================================================
 
 async def idle_message_loop():
+
     await bot.wait_until_ready()
 
+    print(
+        "[IDLE] Sistema de mensajes espontáneos iniciado."
+    )
+
     while not bot.is_closed():
-        await asyncio.sleep(10)
-
-        if config.data.guild_id is None:
-            continue
-
-        if config.data.chat_channel_id is None:
-            continue
-
-        frequency = max(
-            1,
-            config.data.message_frequency_minutes,
-        )
-
-        now = time.time()
-        elapsed = (
-            now - config.data.last_activity_ts
-        )
-
-        if elapsed < frequency * 60:
-            continue
-
-        # Reservamos el siguiente ciclo antes de llamar a la IA para
-        # evitar que dos iteraciones envíen mensajes simultáneos.
-        await activity_touch()
-
-        channel = bot.get_channel(
-            config.data.chat_channel_id
-        )
-
-        if channel is None:
-            try:
-                channel = await bot.fetch_channel(
-                    config.data.chat_channel_id
-                )
-            except Exception as error:
-                print(
-                    "[IDLE] No se pudo obtener el canal:",
-                    error,
-                )
-                continue
 
         try:
-            idle_prompt = (
-                prompt_builder
-                .build_idle_message_prompt()
+
+            config = config_manager.data
+
+            # Todavía no configurado.
+            if (
+                config.guild_id is None
+                or config.chat_channel_id is None
+            ):
+                await asyncio.sleep(10)
+                continue
+
+            frequency_seconds = (
+                config.message_frequency_minutes
+                * 60
             )
 
-            async with channel.typing():
-                response = await run_ai(idle_prompt)
+            now = time.time()
 
-            await update_dashboard()
+            elapsed = (
+                now
+                - config.last_activity_ts
+            )
+
+            remaining = (
+                frequency_seconds
+                - elapsed
+            )
+
+            # Todavía no ha pasado el tiempo.
+            if remaining > 0:
+
+                await asyncio.sleep(
+                    min(
+                        10,
+                        max(
+                            1,
+                            remaining,
+                        ),
+                    )
+                )
+
+                continue
+
+            # =================================================
+            # RESERVAR EL CICLO
+            # =================================================
+
+            # Evita que varias iteraciones detecten
+            # simultáneamente la misma inactividad.
+            await config_manager.touch_activity()
+
+            channel = bot.get_channel(
+                config.chat_channel_id
+            )
+
+            if channel is None:
+
+                try:
+                    channel = await bot.fetch_channel(
+                        config.chat_channel_id
+                    )
+
+                except Exception as error:
+
+                    print(
+                        f"[IDLE] No se pudo obtener "
+                        f"el canal: {error}"
+                    )
+
+                    continue
+
+            print(
+                "[IDLE] Generando mensaje espontáneo..."
+            )
+
+            idle_prompt = (
+                prompt_builder.build_idle_message_prompt()
+            )
+
+            async with ai_semaphore:
+
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        ai.generate,
+                        messages=idle_prompt,
+                        model=character.ai_settings.model,
+                        temperature=character.ai_settings.temperature,
+                        max_tokens=min(
+                            character.ai_settings.max_tokens,
+                            150,
+                        ),
+                    ),
+                    timeout=AI_TIMEOUT,
+                )
+
+            await update_provider_dashboard()
 
             response = response.strip()
 
-            if not response:
-                continue
+            if response:
 
-            await channel.send(response)
+                await channel.send(
+                    response
+                )
+
+                print(
+                    f"[IDLE] Mensaje enviado: "
+                    f"{response[:100]}"
+                )
+
+        except asyncio.CancelledError:
+            raise
+
+        except asyncio.TimeoutError:
 
             print(
-                "[IDLE] Mensaje espontáneo enviado:",
-                response[:100],
+                "[IDLE] Timeout generando mensaje."
             )
 
         except Exception as error:
-            await update_dashboard()
 
             print(
-                "[IDLE] Error:",
-                type(error).__name__,
-                error,
+                f"[IDLE] Error: "
+                f"{type(error).__name__}: {error}"
             )
 
+        await asyncio.sleep(10)
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 async def main():
+
     await start_keep_alive_server()
 
     asyncio.create_task(
@@ -577,5 +810,4 @@ async def main():
     await bot.start(TOKEN)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
