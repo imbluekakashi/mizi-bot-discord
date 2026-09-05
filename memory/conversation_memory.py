@@ -12,7 +12,7 @@ class ConversationMemory:
     def __init__(
         self,
         repository: Optional[ConversationRepository] = None,
-        history_limit: int = 20,
+        history_limit: int = 12,
     ):
         self.repository = repository or ConversationRepository()
         self.history_limit = history_limit
