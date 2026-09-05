@@ -10,8 +10,11 @@ TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL")
 TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN")
 
 if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
-
-    clean_host = TURSO_DATABASE_URL.replace("libsql://", "").replace("https://", "")
+    clean_host = (
+        TURSO_DATABASE_URL
+        .replace("libsql://", "")
+        .replace("https://", "")
+    )
 
     print(f"[DB] Conectando a Turso remoto: {clean_host}")
 
@@ -20,9 +23,7 @@ if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
     engine = create_engine(
         DATABASE_URL,
         echo=False,
-        connect_args={
-            "auth_token": TURSO_AUTH_TOKEN,
-        },
+        connect_args={"auth_token": TURSO_AUTH_TOKEN},
         poolclass=QueuePool,
         pool_size=5,
         max_overflow=5,
@@ -30,12 +31,13 @@ if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN:
         pool_recycle=250,
         pool_timeout=10,
     )
-
 else:
-    print("[DB] TURSO_DATABASE_URL o TURSO_AUTH_TOKEN no detectadas, usando SQLite local.")
+    print(
+        "[DB] TURSO_DATABASE_URL o TURSO_AUTH_TOKEN no detectadas, "
+        "usando SQLite local."
+    )
 
     DATABASE_PATH = os.getenv("DATABASE_PATH", "mizi_bot.db")
-
     Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
 
     DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
@@ -59,10 +61,13 @@ class Base(DeclarativeBase):
 
 
 def init_db():
+    # Importar todos los modelos antes de create_all.
     from database.models import (
+        BotConfigModel,
         CharacterModel,
         ConversationModel,
         MessageModel,
+        ProviderStatsModel,
     )
 
     Base.metadata.create_all(bind=engine)
