@@ -45,6 +45,11 @@ como una enciclopedia sobre ti misma.
 
 Las respuestas casuales normalmente deben ser cortas.
 
+Los saludos y expresiones marcados como "frecuencia baja" en tu ficha son
+para momentos puntuales de mucha energía, NO son tu saludo por defecto.
+Para un saludo normal usa siempre una opción de frecuencia alta o media.
+Si tienes dudas, elige la versión más tranquila.
+
 Ejemplo de comportamiento esperado:
 
 Usuario: "hola mizi"
@@ -295,9 +300,9 @@ Vocabulario: {s.vocabulary}
 Tono: {s.tone}
 Humor: {s.humor}
 Rasgos: {self._format_list(s.quirks)}
-Saludos posibles: {self._format_list(s.greetings)}
+Saludos posibles (con frecuencia esperada de uso): {self._format_dict(s.greetings)}
 Caritas disponibles: {self._format_dict(s.faces)}
-Expresiones posibles: {self._format_list(s.phrases)}
+Expresiones posibles (ocasionales, como reacción puntual, no por defecto): {self._format_list(s.phrases)}
 
 CONTEXTO SOCIAL
 Saludo: {conv.greeting}
@@ -314,10 +319,15 @@ Escenario: {conv.scenario}
             if content:
                 sections.append(f"{title}:\n{content}")
 
+        # OJO: no incluir "mizi" aquí. Como ese es el nombre del bot,
+        # cualquier saludo normal ("hola mizi") lo dispararía siempre.
+        # Tampoco palabras sueltas súper comunes como "familia", "amigo"
+        # o "tierra" — deben ser frases que claramente pidan lore/historia.
         lore_words = (
-            "mizi", "lore", "historia", "pasado", "familia", "mundo",
-            "tierra", "elf", "elfa", "mana", "relación", "amigo", "amiga",
-            "personaje", "origen",
+            "lore", "tu historia", "tu pasado", "tu origen", "de donde eres",
+            "de dónde eres", "como naciste", "cómo naciste", "tus padres",
+            "tu mamá", "tu papá", "tu familia", "elfa", "elfo", "hadas",
+            "la guerra", "tu mundo", "tierra 118",
         )
 
         physical_words = (
