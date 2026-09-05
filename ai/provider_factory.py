@@ -1,6 +1,8 @@
+import time
 from typing import Iterable
 
 from ai.provider import AIProvider
+from ai.provider_monitor import ProviderMonitor
 
 from ai.providers.cerebras_provider import CerebrasProvider
 from ai.providers.gemini_provider import GeminiProvider
@@ -29,7 +31,6 @@ DEFAULT_MODELS = {
 
 def create_provider(provider_name: str) -> AIProvider:
     provider_name = provider_name.lower().strip()
-
     provider_class = PROVIDERS.get(provider_name)
 
     if provider_class is None:
@@ -41,25 +42,25 @@ def create_provider(provider_name: str) -> AIProvider:
 
 
 class FallbackAIProvider(AIProvider):
-
     def __init__(
         self,
         provider_names: Iterable[str],
         provider_models: dict[str, str] | None = None,
     ):
         self.provider_models = provider_models or DEFAULT_MODELS.copy()
-
         self.providers: list[tuple[str, AIProvider]] = []
 
-        for name in provider_names:
-            name = name.lower().strip()
+        names = [
+            name.lower().strip()
+            for name in provider_names
+        ]
 
+        self.monitor = ProviderMonitor(names)
+
+        for name in names:
             try:
                 provider = create_provider(name)
-
-                self.providers.append(
-                    (name, provider)
-                )
+                self.providers.append((name, provider))
 
                 print(
                     f"[AI] Proveedor disponible: {name} "
@@ -68,7 +69,8 @@ class FallbackAIProvider(AIProvider):
 
             except Exception as error:
                 print(
-                    f"[AI] No se pudo inicializar '{name}': {error}"
+                    f"[AI] No se pudo inicializar "
+                    f"'{name}': {error}"
                 )
 
         if not self.providers:
@@ -79,11 +81,24 @@ class FallbackAIProvider(AIProvider):
     def get_model(self, provider_name: str) -> str:
         return self.provider_models.get(
             provider_name,
-            DEFAULT_MODELS.get(
-                provider_name,
-                "",
-            ),
+            DEFAULT_MODELS.get(provider_name, ""),
         )
+
+    @staticmethod
+    def _is_rate_limit(error: Exception) -> bool:
+        text = str(error).lower()
+
+        markers = (
+            "429",
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "quota",
+            "resource_exhausted",
+            "resource exhausted",
+        )
+
+        return any(marker in text for marker in markers)
 
     def generate(
         self,
@@ -95,18 +110,42 @@ class FallbackAIProvider(AIProvider):
 
         last_error: Exception | None = None
 
+        input_text = "\n".join(
+            message.get("content", "")
+            for message in messages
+        )
+
         for name, provider in self.providers:
+            state = next(
+                (
+                    item
+                    for item in self.monitor.snapshot()
+                    if item.provider == name
+                ),
+                None,
+            )
+
+            # No desperdiciar peticiones en un proveedor que acaba
+            # de devolver un 429. Después del cooldown se prueba otra vez.
+            if (
+                state
+                and state.status == "limited"
+                and time.time() < state.limited_until_ts
+            ):
+                print(
+                    f"[AI] Saltando {name}: temporalmente limitado."
+                )
+                continue
 
             selected_model = self.get_model(name)
 
-            # Si el modelo fue especificado manualmente
-            # y no hay uno específico para el proveedor,
-            # se usa el modelo recibido.
             if (
                 model
                 and name not in self.provider_models
             ):
                 selected_model = model
+
+            started = time.monotonic()
 
             try:
                 print(
@@ -121,15 +160,46 @@ class FallbackAIProvider(AIProvider):
                     max_tokens=max_tokens,
                 )
 
+                latency_ms = (
+                    time.monotonic() - started
+                ) * 1000
+
+                self.monitor.record(
+                    name,
+                    success=True,
+                    rate_limited=False,
+                    input_text=input_text,
+                    output_text=result,
+                    latency_ms=latency_ms,
+                )
+
                 print(
-                    f"[AI] Respuesta obtenida desde {name}."
+                    f"[AI] Respuesta obtenida desde {name} "
+                    f"({latency_ms:.0f} ms)."
                 )
 
                 return result
 
             except Exception as error:
+                latency_ms = (
+                    time.monotonic() - started
+                ) * 1000
+
+                rate_limited = self._is_rate_limit(error)
+
+                self.monitor.record(
+                    name,
+                    success=False,
+                    rate_limited=rate_limited,
+                    input_text=input_text,
+                    output_text="",
+                    latency_ms=latency_ms,
+                    error_text=str(error),
+                )
+
                 print(
-                    f"[AI] {name} falló: {error}"
+                    f"[AI] {name} falló "
+                    f"({latency_ms:.0f} ms): {error}"
                 )
 
                 last_error = error
@@ -138,5 +208,6 @@ class FallbackAIProvider(AIProvider):
             raise last_error
 
         raise RuntimeError(
-            "Todos los proveedores de IA fallaron."
+            "Todos los proveedores de IA están temporalmente "
+            "limitados o fallaron."
         )
