@@ -96,7 +96,7 @@ class AdminCommands:
                 )
                 return
 
-            await self.config.set_chat_channel(
+            self.config.set_chat_channel(
                 interaction.channel.id
             )
 
