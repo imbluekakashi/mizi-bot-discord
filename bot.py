@@ -480,70 +480,118 @@ async def handle_ai_message(
             # Actualizar dashboard después del intento.
             await update_provider_dashboard()
 
-            # =================================================
+                        # =================================================
             # REACCIONES
             # =================================================
 
-            if response.strip().upper().startswith(
-                "REACCIONAR:"
-            ):
+            response_clean = response.strip()
+
+            if response_clean.upper().startswith("REACCIONAR:"):
 
                 print(
                     f"[FLOW] {conversation_id} "
                     "-> reaccionando"
                 )
 
-                spec = response.split(
+                # Obtener todo lo que viene después de REACCIONAR:
+                spec = response_clean.split(
                     ":",
                     1,
-                )[1]
+                )[1].strip()
 
-                emojis = resolve_reaction_emojis(
-                    spec
-                )
+                emojis = resolve_reaction_emojis(spec)
 
-                for emoji in emojis:
-
-                    try:
-                        await message.add_reaction(
-                            emoji
-                        )
-
-                    except discord.HTTPException:
-                        pass
-
-                    await asyncio.sleep(
-                        random.uniform(
-                            0.4,
-                            0.9,
-                        )
+                # -------------------------------------------------
+                # Si el modelo pidió reaccionar pero no dio emojis,
+                # no dejamos la interacción completamente vacía.
+                # -------------------------------------------------
+                if not emojis:
+                    print(
+                        f"[REACTION] {conversation_id} "
+                        "-> reacción inválida/vacía"
                     )
 
-                await asyncio.wait_for(
-                    asyncio.to_thread(
-                        memory.add_user_message,
-                        conversation_id,
-                        user_message,
-                    ),
-                    timeout=DB_TIMEOUT,
-                )
-
-                await asyncio.wait_for(
-                    asyncio.to_thread(
-                        memory.add_assistant_message,
-                        conversation_id,
-                        (
-                            f"*reacciona con "
-                            f"{' '.join(emojis)}*"
+                    # Guardamos igualmente el mensaje del usuario,
+                    # pero dejamos que el sistema normalice la salida.
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            memory.add_user_message,
+                            conversation_id,
+                            user_message,
                         ),
-                    ),
-                    timeout=DB_TIMEOUT,
-                )
+                        timeout=DB_TIMEOUT,
+                    )
+
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            memory.add_assistant_message,
+                            conversation_id,
+                            "[Mizi reaccionó, pero la reacción no fue válida]",
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
+
+                else:
+                    # -------------------------------------------------
+                    # Añadir las reacciones una por una.
+                    # -------------------------------------------------
+                    for emoji in emojis:
+
+                        try:
+                            await message.add_reaction(emoji)
+
+                            print(
+                                f"[REACTION] {conversation_id} "
+                                f"-> {emoji}"
+                            )
+
+                        except discord.HTTPException as error:
+                            print(
+                                f"[REACTION] No se pudo añadir "
+                                f"{emoji}: {error}"
+                            )
+
+                        # Pequeña pausa para que las reacciones
+                        # aparezcan de forma natural.
+                        await asyncio.sleep(
+                            random.uniform(
+                                0.4,
+                                0.9,
+                            )
+                        )
+
+                    # -------------------------------------------------
+                    # Guardar conversación.
+                    # -------------------------------------------------
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            memory.add_user_message,
+                            conversation_id,
+                            user_message,
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
+
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            memory.add_assistant_message,
+                            conversation_id,
+                            (
+                                f"*reacciona con "
+                                f"{' '.join(emojis)}*"
+                            ),
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
+
+                    print(
+                        f"[REACTION] {conversation_id} "
+                        f"-> completado: {' '.join(emojis)}"
+                    )
 
             # =================================================
             # RESPUESTA NORMAL
             # =================================================
-
             else:
 
                 print(
