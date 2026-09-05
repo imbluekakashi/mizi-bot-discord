@@ -2,7 +2,6 @@ import os
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from ai.provider_monitor import ProviderMonitor
 
@@ -60,7 +59,7 @@ class AdminCommands:
 
         if not expected_password:
             await interaction.response.send_message(
-                "❌ La contraseña de configuración no está configurada en Render.",
+                "❌ MIZI_SETUP_PASSWORD no está configurada en Render.",
                 ephemeral=True,
             )
             return
@@ -72,11 +71,11 @@ class AdminCommands:
             )
             return
 
-        current_config = self.config_manager.config
+        config = self.config_manager.data
 
         if (
-            current_config.guild_id is not None
-            and current_config.guild_id != str(interaction.guild.id)
+            config.guild_id is not None
+            and config.guild_id != interaction.guild.id
         ):
             await interaction.response.send_message(
                 "❌ Mizi ya está configurada en otro servidor.",
@@ -84,22 +83,24 @@ class AdminCommands:
             )
             return
 
-        success = self.config_manager.setup_guild(
-            guild_id=str(interaction.guild.id),
-            user_id=str(interaction.user.id),
-        )
+        try:
+            await self.config_manager.setup_guild(
+                guild_id=interaction.guild.id,
+                user_id=interaction.user.id,
+            )
+        except Exception as error:
+            print(f"[COMMAND ERROR] /setup -> {error}")
 
-        if not success:
             await interaction.response.send_message(
-                "❌ No se pudo guardar la configuración.",
+                "❌ No se pudo guardar la configuración del servidor.",
                 ephemeral=True,
             )
             return
 
         await interaction.response.send_message(
             "✅ **Servidor autorizado correctamente.**\n\n"
-            "Ahora puedes utilizar `/setchannel` para establecer "
-            "el canal donde Mizi podrá conversar.",
+            "Ahora puedes usar `/setchannel` para elegir "
+            "el canal donde Mizi conversará.",
             ephemeral=True,
         )
 
@@ -121,7 +122,7 @@ class AdminCommands:
             )
             return
 
-        config = self.config_manager.config
+        config = self.config_manager.data
 
         if config.guild_id is None:
             await interaction.response.send_message(
@@ -130,7 +131,7 @@ class AdminCommands:
             )
             return
 
-        if config.guild_id != str(interaction.guild.id):
+        if config.guild_id != interaction.guild.id:
             await interaction.response.send_message(
                 "❌ Este servidor no está autorizado para utilizar Mizi.",
                 ephemeral=True,
@@ -144,14 +145,15 @@ class AdminCommands:
             )
             return
 
-        # IMPORTANTE:
-        # set_chat_channel() es una función normal, NO async.
-        # Por eso NO lleva "await".
-        success = self.config_manager.set_chat_channel(
-            channel_id=str(interaction.channel.id)
-        )
+        try:
+            # IMPORTANTE:
+            # ConfigManager.set_chat_channel() ES async.
+            await self.config_manager.set_chat_channel(
+                interaction.channel.id
+            )
+        except Exception as error:
+            print(f"[COMMAND ERROR] /setchannel -> {error}")
 
-        if not success:
             await interaction.response.send_message(
                 "❌ No se pudo guardar este canal.",
                 ephemeral=True,
@@ -159,8 +161,10 @@ class AdminCommands:
             return
 
         await interaction.response.send_message(
-            f"✅ Este canal ({interaction.channel.mention}) "
-            "ahora es el único canal donde Mizi podrá conversar.",
+            f"✅ **Canal configurado.**\n\n"
+            f"Mizi ahora solo conversará en {interaction.channel.mention}.\n"
+            f"Los mensajes humanos en este canal reiniciarán "
+            f"el temporizador de actividad.",
             ephemeral=True,
         )
 
@@ -183,7 +187,7 @@ class AdminCommands:
             )
             return
 
-        config = self.config_manager.config
+        config = self.config_manager.data
 
         if config.guild_id is None:
             await interaction.response.send_message(
@@ -192,7 +196,7 @@ class AdminCommands:
             )
             return
 
-        if config.guild_id != str(interaction.guild.id):
+        if config.guild_id != interaction.guild.id:
             await interaction.response.send_message(
                 "❌ Este servidor no está autorizado para utilizar Mizi.",
                 ephemeral=True,
@@ -206,9 +210,13 @@ class AdminCommands:
             )
             return
 
-        success = self.config_manager.set_frequency(minutes)
+        try:
+            await self.config_manager.set_frequency(minutes)
+        except Exception as error:
+            print(
+                f"[COMMAND ERROR] /setmessagefrequency -> {error}"
+            )
 
-        if not success:
             await interaction.response.send_message(
                 "❌ No se pudo guardar la frecuencia.",
                 ephemeral=True,
@@ -216,8 +224,9 @@ class AdminCommands:
             return
 
         await interaction.response.send_message(
-            f"✅ Mizi enviará un mensaje espontáneo después de "
-            f"**{minutes} minuto(s)** sin actividad.",
+            f"✅ Frecuencia configurada a **{minutes} minuto(s)**.\n\n"
+            "Si nadie escribe durante ese tiempo, Mizi podrá "
+            "enviar un mensaje espontáneo.",
             ephemeral=True,
         )
 
@@ -239,7 +248,7 @@ class AdminCommands:
             )
             return
 
-        config = self.config_manager.config
+        config = self.config_manager.data
 
         if config.guild_id is None:
             await interaction.response.send_message(
@@ -248,7 +257,7 @@ class AdminCommands:
             )
             return
 
-        if config.guild_id != str(interaction.guild.id):
+        if config.guild_id != interaction.guild.id:
             await interaction.response.send_message(
                 "❌ Este servidor no está autorizado para utilizar Mizi.",
                 ephemeral=True,
@@ -262,36 +271,40 @@ class AdminCommands:
             )
             return
 
-        # Creamos el dashboard inicial.
-        embed = self.provider_monitor.build_embed()
+        models = {}
+
+        if hasattr(self.bot, "character"):
+            models = self.bot.character.ai_settings.provider_models
+
+        embed = self.provider_monitor.build_embed(models)
 
         await interaction.response.send_message(
             embed=embed
         )
 
-        message = await interaction.original_response()
+        try:
+            message = await interaction.original_response()
 
-        success = self.config_manager.set_logs_channel(
-            channel_id=str(interaction.channel.id),
-            message_id=str(message.id),
-        )
-
-        if not success:
-            await message.edit(
-                content="⚠️ El panel fue creado, pero no se pudo guardar su configuración.",
-                embed=embed,
+            await self.config_manager.set_logs_channel(
+                interaction.channel.id,
+                message.id,
             )
-            return
 
-        await message.edit(
-            embed=self.provider_monitor.build_embed()
-        )
+            await message.edit(
+                embed=self.provider_monitor.build_embed(models)
+            )
+
+        except Exception as error:
+            print(
+                f"[COMMAND ERROR] /setchannellogs -> {error}"
+            )
 
     def register(self):
-        """
-        Registra los comandos slash en el CommandTree del bot.
-        """
         self.bot.tree.add_command(self.setup_command)
         self.bot.tree.add_command(self.setchannel_command)
-        self.bot.tree.add_command(self.setmessagefrequency_command)
-        self.bot.tree.add_command(self.setchannellogs_command)
+        self.bot.tree.add_command(
+            self.setmessagefrequency_command
+        )
+        self.bot.tree.add_command(
+            self.setchannellogs_command
+        )
