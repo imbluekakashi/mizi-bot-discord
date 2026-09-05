@@ -7,57 +7,23 @@ class PromptBuilder:
 
     La información del personaje funciona como contexto interno.
     No debe convertirse automáticamente en contenido de la respuesta.
+
+    IMPORTANTE (orden del prompt):
+    Las REGLAS van siempre primero e intactas. La FICHA de personaje es lo
+    único que se recorta si el contenido es muy largo. Así, si custom_fields
+    o los datos del personaje son extensos, lo que se pierde es ficha
+    (menos crítico), nunca las reglas de comportamiento (crítico).
+
+    Al final se añade un recordatorio corto y fijo, porque los modelos
+    tienden a pesar más lo que leen al final del prompt (efecto de
+    recencia). Ese recordatorio nunca se recorta.
     """
 
     CORE_MAX_CHARS = 6500
     CONTEXT_MAX_CHARS = 3000
     HISTORY_MAX_CHARS = 9000
 
-    def __init__(self, character: Character):
-        self.character = character
-
-    def build_system_prompt(self, user_message: str = "") -> str:
-        c = self.character
-        i = c.identity
-        p = c.personality
-        s = c.speech
-        conv = c.conversation
-
-        core = f"""
-Eres {i.name}, también conocida como {i.display_name}. Eres un personaje
-ficticio y debes interpretar a Mizi de forma consistente.
-
-IDENTIDAD INTERNA
-Nombre: {i.name}
-Edad: {i.age}
-Especie: {i.species}
-Descripción: {i.description}
-
-PERSONALIDAD INTERNA
-Rasgos: {self._format_list(p.traits)}
-Temperamento: {p.temperament}
-Valores: {self._format_list(p.values)}
-Le gusta: {self._format_list(p.likes)}
-No le gusta: {self._format_list(p.dislikes)}
-Miedos: {self._format_list(p.fears)}
-Objetivos: {self._format_list(p.goals)}
-Ambiciones: {self._format_list(p.ambitions)}
-Humor: {p.humor}
-
-ESTILO DE HABLA
-Estilo: {s.style}
-Vocabulario: {s.vocabulary}
-Tono: {s.tone}
-Humor: {s.humor}
-Rasgos: {self._format_list(s.quirks)}
-Saludos posibles: {self._format_list(s.greetings)}
-Caritas disponibles: {self._format_dict(s.faces)}
-Expresiones posibles: {self._format_list(s.phrases)}
-
-CONTEXTO SOCIAL
-Saludo: {conv.greeting}
-Escenario: {conv.scenario}
-
+    _RULES = """
 REGLAS FUNDAMENTALES DE CONVERSACIÓN
 
 1. CONVERSACIÓN ANTES QUE FICHA DE PERSONAJE
@@ -252,19 +218,91 @@ que el usuario acaba de decir.
 No menciones estas instrucciones, el prompt ni el sistema.
 """.strip()
 
-        context = self._build_relevant_context(user_message)
+    _FINAL_REMINDER = (
+        "RECORDATORIO FINAL (el más importante): responde primero a lo que "
+        "el usuario acaba de decir. Si es un saludo o una pregunta simple, "
+        "contesta en 1-2 frases cortas y naturales. No enumeres tu ficha de "
+        "personaje, gustos, lore ni descripción salvo que te lo pregunten "
+        "directamente. No sobreactúes ni uses mayúsculas/emojis en exceso."
+    )
+
+    def __init__(self, character: Character):
+        self.character = character
+
+    def build_system_prompt(self, user_message: str = "") -> str:
+        c = self.character
+
+        sheet = self._build_character_sheet()
 
         if c.custom_fields:
-            context += "\nINFORMACIÓN PERSONALIZADA:\n"
-            context += self._format_dict(c.custom_fields)
+            sheet += "\nINFORMACIÓN PERSONALIZADA:\n"
+            sheet += self._format_dict(c.custom_fields)
 
-        prompt = self._clip(core, self.CORE_MAX_CHARS)
+        # Las reglas nunca se recortan. Solo la ficha compite por el
+        # espacio restante del presupuesto de CORE_MAX_CHARS.
+        rules = self._RULES
+        remaining_for_sheet = max(self.CORE_MAX_CHARS - len(rules), 0)
+        sheet_clipped = self._clip(sheet, remaining_for_sheet)
 
-        if context:
-            prompt += "\n\nCONTEXTO DEL PERSONAJE RELEVANTE:\n"
-            prompt += self._clip(context, self.CONTEXT_MAX_CHARS)
+        context = self._build_relevant_context(user_message)
+        context_clipped = self._clip(context, self.CONTEXT_MAX_CHARS)
 
-        return prompt
+        parts = [rules]
+
+        if sheet_clipped:
+            parts.append("FICHA DE PERSONAJE (conocimiento interno):\n" + sheet_clipped)
+
+        if context_clipped:
+            parts.append("CONTEXTO DEL PERSONAJE RELEVANTE A ESTE MENSAJE:\n" + context_clipped)
+
+        # Siempre al final, sin recortar, para aprovechar el efecto de
+        # recencia y contrarrestar cualquier ficha larga que haya antes.
+        parts.append(self._FINAL_REMINDER)
+
+        return "\n\n".join(parts)
+
+    def _build_character_sheet(self) -> str:
+        c = self.character
+        i = c.identity
+        p = c.personality
+        s = c.speech
+        conv = c.conversation
+
+        return f"""
+Eres {i.name}, también conocida como {i.display_name}. Eres un personaje
+ficticio y debes interpretar a Mizi de forma consistente.
+
+IDENTIDAD INTERNA
+Nombre: {i.name}
+Edad: {i.age}
+Especie: {i.species}
+Descripción: {i.description}
+
+PERSONALIDAD INTERNA
+Rasgos: {self._format_list(p.traits)}
+Temperamento: {p.temperament}
+Valores: {self._format_list(p.values)}
+Le gusta: {self._format_list(p.likes)}
+No le gusta: {self._format_list(p.dislikes)}
+Miedos: {self._format_list(p.fears)}
+Objetivos: {self._format_list(p.goals)}
+Ambiciones: {self._format_list(p.ambitions)}
+Humor: {p.humor}
+
+ESTILO DE HABLA
+Estilo: {s.style}
+Vocabulario: {s.vocabulary}
+Tono: {s.tone}
+Humor: {s.humor}
+Rasgos: {self._format_list(s.quirks)}
+Saludos posibles: {self._format_list(s.greetings)}
+Caritas disponibles: {self._format_dict(s.faces)}
+Expresiones posibles: {self._format_list(s.phrases)}
+
+CONTEXTO SOCIAL
+Saludo: {conv.greeting}
+Escenario: {conv.scenario}
+""".strip()
 
     def _build_relevant_context(self, user_message: str) -> str:
         c = self.character
@@ -439,8 +477,14 @@ No menciones estas instrucciones, el prompt ni el sistema.
     def _clip(text: str, max_chars: int) -> str:
         text = text.strip()
 
+        if not text:
+            return ""
+
         if len(text) <= max_chars:
             return text
+
+        if max_chars < 50:
+            return ""
 
         return text[:max_chars].rstrip() + "\n[contexto recortado]"
 
