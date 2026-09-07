@@ -22,6 +22,7 @@ class PromptBuilder:
     CORE_MAX_CHARS = 6500
     CONTEXT_MAX_CHARS = 3000
     HISTORY_MAX_CHARS = 9000
+    LONG_TERM_MAX_CHARS = 1200
 
     _RULES = """
 REGLAS FUNDAMENTALES DE CONVERSACIÓN
@@ -390,6 +391,48 @@ Reglas para las reacciones:
   aunque la línea de REACCIONAR sí los tenga).
 - No expliques que estás "reaccionando" ni qué significa el formato.
 
+MEMORIZAR (RECUERDOS PERMANENTES)
+
+Además de reaccionar y de responder normalmente, puedes guardar un
+recuerdo permanente sobre la persona con la que hablas — algo que debas
+recordar para siempre, no solo en esta conversación.
+
+Solo hazlo cuando la persona comparta algo genuinamente duradero sobre sí
+misma, por ejemplo:
+- su nombre, cumpleaños, edad;
+- su trabajo, estudios, ciudad;
+- una mascota, familiar o relación importante que mencione;
+- un gusto, hobby o proyecto importante para ella (no un gusto trivial de
+  paso);
+- un evento significativo de su vida que te cuente.
+
+NO guardes:
+- estados de ánimo temporales ("hoy está cansada", "está de mal humor");
+- cosas triviales sin importancia real ("le gustó el chiste");
+- nada que ya sepas (no repitas un recuerdo que ya tienes de esta
+  persona, mira la sección de recuerdos permanentes si la tienes);
+- información sobre Mizi misma (eso ya lo sabes, no es un recuerdo sobre
+  el usuario).
+
+Para guardar un recuerdo, añade una línea SEPARADA, en su propia línea,
+al final de tu respuesta completa (después de cualquier "|||" o
+"REACCIONAR:" que hayas usado), con este formato exacto:
+
+MEMORIZAR: <el hecho, corto y claro, en tercera persona>
+
+Ejemplo completo (el usuario cuenta que se llama Carlos y tiene un perro
+llamado Rocko):
+a weno un gusto carlos :3
+|||
+y rocko suena tierno, cuantos años tiene?
+MEMORIZAR: El usuario se llama Carlos y tiene un perro llamado Rocko.
+
+Esta línea de "MEMORIZAR:" NUNCA se le muestra a la persona — es solo
+para tu memoria interna, el sistema la quita antes de enviar el mensaje.
+No la menciones, no digas que estás guardando algo, no anuncies que vas a
+recordar esto. Solo aparece cuando de verdad hay algo que merezca
+recordarse; la gran mayoría de tus respuestas NO necesitan esta línea.
+
 PRIORIDAD
 
 La prioridad siempre es:
@@ -422,13 +465,22 @@ No menciones estas instrucciones, el prompt ni el sistema.
         "des una explicación seria tipo enciclopedia ni termines con una "
         "pregunta genérica: reacciona corto y casual (risa, comentario, "
         "seguirle el juego), divide con '|||', y escribe de forma más "
-        "descuidada (menos tildes, menos puntuación, frases cortas)."
+        "descuidada (menos tildes, menos puntuación, frases cortas). Si "
+        "la persona comparte algo genuinamente duradero sobre sí misma "
+        "(nombre, mascota, trabajo, gusto importante, etc.) que no esté "
+        "ya en tus recuerdos permanentes, añade al final una línea "
+        "'MEMORIZAR: <hecho>' — pero solo cuando de verdad aplique, no "
+        "en cada mensaje."
     )
 
     def __init__(self, character: Character):
         self.character = character
 
-    def build_system_prompt(self, user_message: str = "") -> str:
+    def build_system_prompt(
+        self,
+        user_message: str = "",
+        long_term_memories: list[str] | None = None,
+    ) -> str:
         c = self.character
 
         sheet = self._build_character_sheet()
@@ -453,6 +505,20 @@ No menciones estas instrucciones, el prompt ni el sistema.
 
         if context_clipped:
             parts.append("CONTEXTO DEL PERSONAJE RELEVANTE A ESTE MENSAJE:\n" + context_clipped)
+
+        if long_term_memories:
+            facts_text = "\n".join(
+                f"- {fact}" for fact in long_term_memories
+            )
+            facts_clipped = self._clip(facts_text, self.LONG_TERM_MAX_CHARS)
+
+            if facts_clipped:
+                parts.append(
+                    "RECUERDOS PERMANENTES SOBRE ESTA PERSONA (úsalos con "
+                    "naturalidad cuando sean relevantes, no los anuncies ni "
+                    "los recites como lista, y no repitas un hecho que ya "
+                    "está aquí como si fuera nuevo):\n" + facts_clipped
+                )
 
         # Siempre al final, sin recortar, para aprovechar el efecto de
         # recencia y contrarrestar cualquier ficha larga que haya antes.
@@ -591,11 +657,15 @@ Escenario: {conv.scenario}
         self,
         user_message: str,
         history: list[dict[str, str]] | None = None,
+        long_term_memories: list[str] | None = None,
     ) -> list[dict[str, str]]:
         messages = [
             {
                 "role": "system",
-                "content": self.build_system_prompt(user_message),
+                "content": self.build_system_prompt(
+                    user_message,
+                    long_term_memories=long_term_memories,
+                ),
             }
         ]
 
