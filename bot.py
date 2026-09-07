@@ -830,8 +830,44 @@ async def idle_message_loop():
                 "[IDLE] Generando mensaje espontáneo..."
             )
 
+            # Los mensajes espontáneos tienen su propia "conversación"
+            # por canal (no por usuario), separada de las conversaciones
+            # normales, para que Mizi recuerde lo último que dijo por su
+            # cuenta y no repita temas.
+            idle_conversation_id = f"idle:{config.chat_channel_id}"
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        memory.ensure_conversation,
+                        conversation_id=idle_conversation_id,
+                        character_id="mizi",
+                        user_id="mizi",
+                        guild_id=str(config.guild_id),
+                        channel_id=str(config.chat_channel_id),
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
+
+                idle_history = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        memory.get_history,
+                        idle_conversation_id,
+                    ),
+                    timeout=DB_TIMEOUT,
+                )
+
+            except Exception as error:
+                print(
+                    f"[IDLE] Error leyendo memoria de mensajes "
+                    f"espontáneos: {error}"
+                )
+                idle_history = []
+
             idle_prompt = (
-                prompt_builder.build_idle_message_prompt()
+                prompt_builder.build_idle_message_prompt(
+                    history=idle_history,
+                )
             )
 
             async with ai_semaphore:
@@ -866,6 +902,21 @@ async def idle_message_loop():
                 )
 
             elif response_clean:
+
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            memory.add_assistant_message,
+                            idle_conversation_id,
+                            response_clean,
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
+                except Exception as error:
+                    print(
+                        f"[IDLE] Error guardando mensaje "
+                        f"espontáneo en memoria: {error}"
+                    )
 
                 parts = split_response(
                     response_clean
