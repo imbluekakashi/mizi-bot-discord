@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import re
 import time
 
 import discord
@@ -13,6 +14,7 @@ from database.database import init_db
 from database.repositories.bot_config_repository import BotConfigRepository
 from keep_alive import start_keep_alive_server
 from memory.conversation_memory import ConversationMemory
+from memory.long_term_memory import LongTermMemory
 from models.character import Character
 from runtime_config import ConfigManager
 
@@ -56,6 +58,8 @@ prompt_builder = PromptBuilder(character)
 memory = ConversationMemory(
     history_limit=character.ai_settings.history_limit
 )
+
+long_term_memory = LongTermMemory()
 
 ai = FallbackAIProvider(
     character.ai_settings.fallback_providers
@@ -175,6 +179,43 @@ def resolve_reaction_emojis(
             emojis.append(part)
 
     return emojis
+
+
+_MEMORIZE_LINE = re.compile(
+    r"^\s*MEMORIZAR:\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def extract_memory_facts(
+    text: str,
+) -> tuple[str, list[str]]:
+    """
+    Saca cualquier línea "MEMORIZAR: <hecho>" del texto de respuesta
+    (puede haber cero, una o varias, en cualquier posición) y
+    devuelve el texto limpio (sin esas líneas) junto con la lista
+    de hechos encontrados.
+    """
+
+    facts = []
+    kept_lines = []
+
+    for line in text.split("\n"):
+
+        match = _MEMORIZE_LINE.match(line)
+
+        if match:
+            fact = match.group(1).strip()
+
+            if fact:
+                facts.append(fact)
+
+        else:
+            kept_lines.append(line)
+
+    cleaned = "\n".join(kept_lines).strip()
+
+    return cleaned, facts
 
 
 # ============================================================
@@ -463,10 +504,19 @@ async def handle_ai_message(
                 timeout=DB_TIMEOUT,
             )
 
+            long_term_facts = await asyncio.wait_for(
+                asyncio.to_thread(
+                    long_term_memory.get_facts,
+                    str(message.author.id),
+                ),
+                timeout=DB_TIMEOUT,
+            )
+
             messages = (
                 prompt_builder.build_messages(
                     user_message,
                     history=history,
+                    long_term_memories=long_term_facts,
                 )
             )
 
@@ -494,6 +544,40 @@ async def handle_ai_message(
             await update_provider_dashboard()
 
             # =================================================
+            # MEMORIZAR (RECUERDOS PERMANENTES)
+            # =================================================
+            # Se procesa antes que la reacción, sobre el texto
+            # crudo completo, porque la línea "MEMORIZAR: ..."
+            # puede aparecer en cualquier posición (al final del
+            # todo, incluso después de un "|||").
+
+            response_clean, memory_facts = extract_memory_facts(
+                response.strip()
+            )
+
+            for fact in memory_facts:
+
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            long_term_memory.add,
+                            str(message.author.id),
+                            fact,
+                        ),
+                        timeout=DB_TIMEOUT,
+                    )
+
+                    print(
+                        f"[MEMORY] {conversation_id} "
+                        f"-> guardado: {fact[:80]}"
+                    )
+
+                except Exception as error:
+                    print(
+                        f"[MEMORY] Error guardando recuerdo: {error}"
+                    )
+
+            # =================================================
             # DETECTAR REACCIÓN
             # =================================================
             # Solo la PRIMERA línea es la especificación de la
@@ -502,8 +586,6 @@ async def handle_ai_message(
             # normal que Mizi quiere mandar además de reaccionar,
             # y debe seguir exactamente el mismo flujo que
             # cualquier respuesta normal (guardado, "|||", envío).
-
-            response_clean = response.strip()
 
             is_reaction = response_clean.upper().startswith(
                 "REACCIONAR:"
@@ -888,7 +970,12 @@ async def idle_message_loop():
 
             await update_provider_dashboard()
 
-            response_clean = response.strip()
+            # Defensivo: no hay un usuario específico en un mensaje
+            # espontáneo, así que si el modelo intentara usar
+            # MEMORIZAR aquí por error, se descarta sin guardar nada.
+            response_clean, _ = extract_memory_facts(
+                response.strip()
+            )
 
             # Los mensajes espontáneos no tienen un mensaje de
             # usuario al que reaccionar, así que si el modelo
