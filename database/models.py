@@ -62,3 +62,19 @@ class ProviderStatsModel(Base):
     last_latency_ms: Mapped[float] = mapped_column(nullable=False, default=0.0)
     last_used_ts: Mapped[float] = mapped_column(nullable=False, default=0.0)
     limited_until_ts: Mapped[float] = mapped_column(nullable=False, default=0.0)
+
+
+class MemoryModel(Base):
+    """
+    Recuerdos permanentes sobre un usuario, independientes del
+    historial de conversación (que se recorta solo con el tiempo).
+    Estos NO se recortan automáticamente por antigüedad, solo se
+    limita cuántos se inyectan en el prompt.
+    """
+
+    __tablename__ = "memories"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(nullable=False, default=0.0)
