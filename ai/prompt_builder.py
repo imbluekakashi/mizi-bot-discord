@@ -615,12 +615,28 @@ Escenario: {conv.scenario}
 
         return messages
 
-    def build_idle_message_prompt(self) -> list[dict[str, str]]:
-        return [
+    def build_idle_message_prompt(
+        self,
+        history: list[dict[str, str]] | None = None,
+    ) -> list[dict[str, str]]:
+
+        messages = [
             {
                 "role": "system",
                 "content": self.build_system_prompt("mensaje espontáneo"),
             },
+        ]
+
+        if history:
+
+            messages.extend(
+                self._trim_history(
+                    history,
+                    self.HISTORY_MAX_CHARS,
+                )
+            )
+
+        messages.append(
             {
                 "role": "user",
                 "content": (
@@ -631,6 +647,10 @@ Escenario: {conv.scenario}
                     "de uso). Puede ser un estado de ánimo, algo random, "
                     "una pequeña queja, una curiosidad o algo que "
                     "simplemente te apeteció compartir.\n\n"
+                    "Arriba tienes tus últimos mensajes espontáneos "
+                    "(si los hay). No repitas el mismo tema, chiste o "
+                    "estructura que ya usaste hace poco — habla de algo "
+                    "distinto.\n\n"
                     "Debe parecer un mensaje que Mizi decidió escribir por "
                     "iniciativa propia, no una respuesta de asistente.\n\n"
                     "No hagas una presentación de ti misma.\n"
@@ -648,8 +668,10 @@ Escenario: {conv.scenario}
                     "cumple una regla, simplemente no lo incluyas, no lo "
                     "menciones."
                 ),
-            },
-        ]
+            }
+        )
+
+        return messages
 
     @staticmethod
     def _trim_history(
