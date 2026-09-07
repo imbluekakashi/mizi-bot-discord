@@ -844,7 +844,7 @@ async def idle_message_loop():
                         temperature=character.ai_settings.temperature,
                         max_tokens=min(
                             character.ai_settings.max_tokens,
-                            150,
+                            300,
                         ),
                     ),
                     timeout=AI_TIMEOUT,
@@ -852,17 +852,45 @@ async def idle_message_loop():
 
             await update_provider_dashboard()
 
-            response = response.strip()
+            response_clean = response.strip()
 
-            if response:
+            # Los mensajes espontáneos no tienen un mensaje de
+            # usuario al que reaccionar, así que si el modelo
+            # devolviera "REACCIONAR: ..." por error, lo ignoramos
+            # y no mandamos nada (evita mandar basura al canal).
+            if response_clean.upper().startswith("REACCIONAR:"):
 
-                await channel.send(
-                    response
+                print(
+                    "[IDLE] El modelo devolvió una reacción "
+                    "en un mensaje espontáneo, se ignora."
                 )
+
+            elif response_clean:
+
+                parts = split_response(
+                    response_clean
+                )
+
+                for index, part in enumerate(parts):
+
+                    if index > 0:
+
+                        async with channel.typing():
+
+                            await asyncio.sleep(
+                                random.uniform(
+                                    1.0,
+                                    2.5,
+                                )
+                            )
+
+                    await channel.send(
+                        part
+                    )
 
                 print(
                     f"[IDLE] Mensaje enviado: "
-                    f"{response[:100]}"
+                    f"{response_clean[:100]}"
                 )
 
         except asyncio.CancelledError:
