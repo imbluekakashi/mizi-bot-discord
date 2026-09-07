@@ -26,11 +26,23 @@ class GroqProvider(AIProvider):
         max_tokens: int = 150,
     ) -> str:
 
+        # Los modelos gpt-oss son modelos de razonamiento: si no se
+        # limita el esfuerzo, pueden gastar todo el presupuesto de
+        # tokens "pensando" internamente y devolver contenido vacío.
+        # "low" evita eso sin cambiar el estilo de las respuestas de
+        # Mizi (que de por sí deben ser cortas, no necesitan
+        # razonamiento profundo).
+        extra_params = {}
+
+        if "gpt-oss" in model:
+            extra_params["reasoning_effort"] = "low"
+
         response = self.client.chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            **extra_params,
         )
 
         content = response.choices[0].message.content
