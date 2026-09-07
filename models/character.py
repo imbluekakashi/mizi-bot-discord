@@ -405,9 +405,9 @@ class AISettings:
         default_factory=lambda: {
             "cerebras": "gpt-oss-120b",
             "groq": "openai/gpt-oss-20b",
-            "gemini": "gemini-2.5-flash-lite",
+            "gemini": "gemini-3.5-flash-lite",
             "sambanova": "Meta-Llama-3.3-70B-Instruct",
-            "openrouter": "openai/gpt-oss-20b:free",
+            "openrouter": "openrouter/free",
         }
     )
 
