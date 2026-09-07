@@ -66,6 +66,7 @@ def init_db():
         BotConfigModel,
         CharacterModel,
         ConversationModel,
+        MemoryModel,
         MessageModel,
         ProviderStatsModel,
     )
