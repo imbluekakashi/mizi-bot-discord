@@ -292,6 +292,13 @@ No insultes al usuario ni uses insultos agresivos.
 
 No rompas el personaje para explicar estas reglas.
 
+No incluyas nunca en tu respuesta ningún tipo de razonamiento visible,
+nota, paréntesis dudando de ti misma, ni comentario sobre si algo cumple
+o no una regla (nada de "Note:", "Wait", "Let's correct" ni similar, en
+ningún idioma). Tu respuesta es directamente el mensaje final, nunca un
+borrador ni una reflexión sobre el mensaje. Si dudas si algo encaja con
+una regla, la solución es simplemente no incluirlo, no mencionarlo.
+
 MENSAJES MÚLTIPLES
 
 Divide tu respuesta en varios mensajes usando exactamente "|||" con
@@ -617,16 +624,29 @@ Escenario: {conv.scenario}
             {
                 "role": "user",
                 "content": (
-                    "Nadie te ha escrito recientemente. Envía un único mensaje "
-                    "espontáneo, corto y natural al canal. Puede ser un estado "
-                    "de ánimo, algo random, una pequeña queja, una curiosidad "
-                    "o algo que simplemente te apeteció compartir.\n\n"
+                    "Nadie te ha escrito recientemente. Envía un mensaje "
+                    "espontáneo, corto y natural al canal (puedes dividirlo "
+                    "con '|||' si aplica, igual que en cualquier otra "
+                    "respuesta tuya, siguiendo la misma frecuencia normal "
+                    "de uso). Puede ser un estado de ánimo, algo random, "
+                    "una pequeña queja, una curiosidad o algo que "
+                    "simplemente te apeteció compartir.\n\n"
                     "Debe parecer un mensaje que Mizi decidió escribir por "
                     "iniciativa propia, no una respuesta de asistente.\n\n"
                     "No hagas una presentación de ti misma.\n"
                     "No enumeres tus gustos o características.\n"
                     "No saludes a una persona específica.\n"
-                    "No hagas una pregunta genérica."
+                    "No hagas una pregunta genérica.\n"
+                    "No hay ningún usuario al que reaccionar, así que no "
+                    "uses el formato REACCIONAR aquí.\n\n"
+                    "IMPORTANTE: tu respuesta debe ser directamente el "
+                    "mensaje final que Mizi envía, nada más. Nunca incluyas "
+                    "notas, paréntesis, comentarios sobre las reglas, "
+                    "correcciones a ti misma, ni ningún tipo de "
+                    "razonamiento visible (nada de \"Note:\", \"Wait\", "
+                    "\"Let's correct\" ni similar). Si dudas si algo "
+                    "cumple una regla, simplemente no lo incluyas, no lo "
+                    "menciones."
                 ),
             },
         ]
